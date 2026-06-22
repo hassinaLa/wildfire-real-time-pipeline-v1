@@ -1,0 +1,27 @@
+{
+  "data": {
+    "h3_commune": "8838292401fffff",
+    "h3_center_lat": 36.75,
+    "h3_center_lon": 3.05,
+    "altitude_moy": 400.0,
+    "pente_moy": 12.0,
+    "dist_route_m": 800.0,
+    "dist_urbain_m": 2500.0,
+    "humidity_min(%)": 20.0,
+    "temperature_moy(°C)": 32.0,
+    "wind_speed_max(km/h)": 25.0,
+    "precipitation_1d_mm": 0.0,
+    "precipitation_7d_sum_mm": 1.5,
+    "soil_moisture": 0.15,
+    "VPD_kPa": 2.7,
+    "NDVI_30d_mean": 0.35,
+    "NDVI_30d_min": 0.20,
+    "NDVI_30d_std": 0.08,
+    "month": 3,
+    "month_sin": 0.866,
+    "month_cos": 0.5,
+    "doy_sin": 0.94,
+    "doy_cos": 0.34,
+    "is_weekend": 0
+  }
+}
