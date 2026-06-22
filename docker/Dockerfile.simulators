@@ -1,0 +1,7 @@
+FROM flink:1.18.0-scala_2.12-java11
+
+WORKDIR /app
+
+COPY target/environment-simulator-java-1.0-SNAPSHOT.jar /app/environment-simulator-java-1.0-SNAPSHOT.jar
+
+CMD ["java", "-cp", "/app/environment-simulator-java-1.0-SNAPSHOT.jar", "com.environment.simulator.UnifiedSimulatorLauncher"]

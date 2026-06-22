@@ -1,0 +1,237 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - meteo-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - meteo-network
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    restart: unless-stopped
+    depends_on:
+      - kafka
+    ports:
+      - "8085:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    networks:
+      - meteo-network
+
+  postgres:
+    image: postgis/postgis:15-3.4
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: meteo_db
+      POSTGRES_USER: flinkuser
+      POSTGRES_PASSWORD: flinkpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - ../postgres_data:/var/lib/postgresql/data
+      - ../db_init/create_table.sql:/docker-entrypoint-initdb.d/01_create_table.sql
+      - ../db_init/create_feature_snapshots.sql:/docker-entrypoint-initdb.d/02_create_feature_snapshots.sql
+      - ../db_init/create_predictions.sql:/docker-entrypoint-initdb.d/03_create_predictions.sql
+    networks:
+      - meteo-network
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      PGADMIN_DEFAULT_EMAIL: hassinalakehali123@gmail.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "8081:80"
+    networks:
+      - meteo-network
+
+  flink-jobmanager:
+    image: flink:1.18.0-scala_2.12-java11
+    container_name: flink-jobmanager
+    hostname: flink-jobmanager
+    restart: unless-stopped
+    command: jobmanager
+    ports:
+      - "8082:8081"
+    environment:
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        state.backend: hashmap
+        state.checkpoints.dir: file:///opt/flink/checkpoints
+        state.savepoints.dir: file:///opt/flink/savepoints
+        execution.checkpointing.interval: 60000
+        execution.checkpointing.mode: EXACTLY_ONCE
+        execution.checkpointing.min-pause: 30000
+        execution.checkpointing.timeout: 120000
+        execution.checkpointing.max-concurrent-checkpoints: 1
+        metrics.latency.interval: 5000   
+        restart-strategy: fixed-delay
+        restart-strategy.fixed-delay.attempts: 10
+        restart-strategy.fixed-delay.delay: 30s
+      TIME_MODE: ${TIME_MODE:-HISTORICAL_2025}
+    volumes:
+      - ../flink-checkpoints:/opt/flink/checkpoints
+      - ../flink-savepoints:/opt/flink/savepoints
+    networks:
+      - meteo-network
+
+  flink-taskmanager:
+    image: flink:1.18.0-scala_2.12-java11
+    container_name: flink-taskmanager
+    restart: unless-stopped
+    depends_on:
+      - flink-jobmanager
+    command: taskmanager
+    environment:
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 4
+        state.backend: hashmap
+        state.checkpoints.dir: file:///opt/flink/checkpoints
+        state.savepoints.dir: file:///opt/flink/savepoints
+        execution.checkpointing.interval: 60000
+        execution.checkpointing.mode: EXACTLY_ONCE
+        execution.checkpointing.min-pause: 30000
+        execution.checkpointing.timeout: 120000
+        execution.checkpointing.max-concurrent-checkpoints: 1
+        metrics.latency.interval: 5000
+        restart-strategy: fixed-delay
+        restart-strategy.fixed-delay.attempts: 10
+        restart-strategy.fixed-delay.delay: 30s
+      TIME_MODE: ${TIME_MODE:-HISTORICAL_2025}
+    volumes:
+      - ../flink-checkpoints:/opt/flink/checkpoints
+      - ../flink-savepoints:/opt/flink/savepoints
+    networks:
+      - meteo-network
+
+  simulators:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.simulators
+    container_name: simulators
+    restart: unless-stopped
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      TIME_MODE: ${TIME_MODE:-HISTORICAL_2025}
+    networks:
+      - meteo-network
+
+  flink-job-submit:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.flink
+    container_name: flink-job-submit
+    restart: unless-stopped
+    depends_on:
+      - flink-jobmanager
+      - flink-taskmanager
+      - kafka
+      - postgres
+    environment:
+      FLINK_JOB_MAIN_CLASS: com.environment.flink.UnifiedFlinkJob
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      POSTGRES_URL: jdbc:postgresql://postgres:5432/meteo_db
+      POSTGRES_USER: flinkuser
+      POSTGRES_PASSWORD: flinkpass
+      FLINK_CHECKPOINT_PATH: file:///opt/flink/checkpoints
+      FLINK_SAVEPOINT_PATH: file:///opt/flink/savepoints
+      TIME_MODE: ${TIME_MODE:-HISTORICAL_2025}
+    volumes:
+      - ../flink-checkpoints:/opt/flink/checkpoints
+      - ../flink-savepoints:/opt/flink/savepoints
+    networks:
+      - meteo-network
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "Waiting for Flink JobManager..."
+        until nc -z flink-jobmanager 8081; do sleep 2; done
+
+        echo "Waiting for Kafka..."
+        until nc -z kafka 9092; do sleep 2; done
+
+        echo "Waiting for Postgres..."
+        until nc -z postgres 5432; do sleep 2; done
+
+        echo "Extra wait to allow services to stabilize..."
+        sleep 10
+
+        echo "Submitting UnifiedFlinkJob..."
+        /opt/flink/bin/flink run -d -m flink-jobmanager:8081 -c com.environment.flink.UnifiedFlinkJob /opt/flink/usrlib/environment-simulator-java-1.0-SNAPSHOT.jar
+
+        echo "UnifiedFlinkJob submitted."
+        tail -f /dev/null
+  grafana:
+     image: grafana/grafana:latest
+     container_name: grafana
+     restart: unless-stopped
+     depends_on:
+       - postgres
+     ports:
+       - "3001:3000"
+     environment:
+       GF_SECURITY_ADMIN_USER: admin
+       GF_SECURITY_ADMIN_PASSWORD: admin
+     volumes:
+       - ../grafana_data:/var/lib/grafana
+       - ../db_init/Forest_Polygons_Algeria.geojson:/usr/share/grafana/public/maps/forests.geojson
+     networks:
+       - meteo-network
+
+  metrics_monitor:
+    build:
+      context: ./metrics_monitor
+      dockerfile: Dockerfile.metrics
+    container_name: metrics_monitor
+    restart: unless-stopped
+    depends_on:
+      - flink-jobmanager
+    environment:
+      - FLINK_URL=http://flink-jobmanager:8081
+    volumes:
+      - ../metrics_output:/data
+    networks:
+      - meteo-network
+
+networks:
+  meteo-network:
+    driver: bridge
